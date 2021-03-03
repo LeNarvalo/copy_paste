@@ -2,15 +2,21 @@ from pynput import keyboard
 from pynput.keyboard import Key, Listener
 from pynput.keyboard import Controller
 from pygame.mixer import music
-import threading, win32clipboard, win32gui, time, string, win32api, os, pygame, sys, tooltip
 from tkinter import *
 from tkinter.colorchooser import askcolor 
 from tkinter import PhotoImage as PI
+from PIL import ImageGrab, Image
+from match_img import find_match, thread_match
+from run_array import Spiral, Methodic
+import threading, win32clipboard, win32gui, time, string, win32api, os, pygame, sys, tooltip, ctypes, win32con, winsound, cv2
 
 pygame.init()
 
 '''RESTE A FAIRE'''
-#Bring fenetre d'aide Ctrl+v+? par dessus
+#Vérifier si les bords noirs sont moins long à analyser que les images avec des détails
+#Créer une fonction pour révaluer
+#Rogner l'image précédente pour ne conserver que les bords
+'''____END______'''
 
 #####################VARIABLES######################
 chemin = os.path.expanduser('~\Copy_Paste')
@@ -26,12 +32,16 @@ tip_time=time.time()
 type=None
 listener=None
 passed=False
-paste_finished=False #Useless
+screens = []
 ####################################################
 
 if not os.path.exists(chemin):  
 	win32api.MessageBox(0, 'Vous devez réinstaller copy_past !', 'Fichiers manquants', 0x00040030)
 	sys.exit(1)
+
+if not os.path.exists(chemin+"\\Screenshots"):  
+	os.mkdir(chemin+"\\Screenshots")
+	#os.mkdir(chemin+"\\Screenshots\\Crops")
 
 try:
 	file = open(chemin+"\\Params.txt","r")
@@ -319,7 +329,6 @@ def copy_fx():
 	global type, passed
 	type=None
 	if number_c[-1]:
-		#print('ctrl+c+n°',number_c[-1])
 		while number_c.count(number_c[-1])>1:
 			id = number_c.index(number_c[-1])
 			del words[id]
@@ -328,9 +337,18 @@ def copy_fx():
 		word = win32clipboard.GetClipboardData()
 		win32clipboard.CloseClipboard()
 		words.append(word)
+		k = Controller()
+		if parameters[2]:
+			try:
+				with k.pressed(Key.ctrl_l):
+					k.press('z')
+					k.release('z')
+					k.press('z')
+					k.release('z')
+			except:
+				pass
 		threading.Thread(target=playsound,args=("copy",)).start()
 		threading.Thread(target=pop_up,args=("Ctrl + C",str(number_c[-1]),0.1,0.5,)).start()
-		#print(list(zip(number_c,words)))
 		number_c.append("")
 	passed=True
 	listener.stop()
@@ -339,13 +357,13 @@ def copy_fx():
 def paste_fx():
 	global type, passed
 	type=None
-	#paste_finished=False
 	passed=True
 	if number_v in number_c and number_v:
 		nv=number_v #permet d'éviter la remise à None de number_v sur un autre thread
 		threading.Thread(target=playsound,args=("paste",)).start()
 		threading.Thread(target=pop_up,args=("Ctrl + V",str(nv),0.068,0.45,)).start()
 		time.sleep(1)
+		#startpaste=time.time()
 		k = Controller()
 		try:
 			win32clipboard.OpenClipboard()
@@ -358,17 +376,21 @@ def paste_fx():
 				for l in word+nv:
 					k.press(Key.backspace)
 					k.release(Key.backspace)
+				#print('del',(time.time()-startpaste))
 			except:
 				pass
 		word = words[number_c.index(nv)]
+		#print('open',(time.time()-startpaste))
 		win32clipboard.OpenClipboard()
 		win32clipboard.EmptyClipboard()
 		win32clipboard.SetClipboardText(word)
 		win32clipboard.CloseClipboard()
+		#print('close',(time.time()-startpaste))
 		k.press(Key.ctrl_l)
 		k.press('v')
 		k.release(Key.ctrl_l)
 		k.release('v')
+		#print('paste',(time.time()-startpaste))
 		listener.stop()		
 		return False
 	
@@ -395,7 +417,9 @@ def on_release(key):
 					help_text+=c[0]+' : '+c[1][:40]+"...\n"
 				else:
 					help_text+=c[0]+' : '+c[1][:40]+"\n"
-			win32api.MessageBox(0, help_text, 'Presse-papiers', 0x00010040)
+			if not len(help_text):
+				help_text="Le presse-papiers est vide !"
+			win32api.MessageBox(0, help_text, 'Presse-papiers', 0x00201040)
 			listener.stop()
 			return False
 
@@ -465,9 +489,113 @@ def ctrl_v():
 	number_v = ''
 	ctrl_c_or_v()
 
+def screenshot():
+	global screens
+	winsound.Beep(200,200)
+	im = ImageGrab.grab()
+	tns = str(time.time_ns())
+	pathname = chemin+"\\Screenshots\\"+tns+'.jpg'
+	im.save(pathname)
+	screens.append([tns,pathname,im.size])
+
+	if len(screens)<2:
+		return
+	elif int((int(tns)-int(screens[-2][0]))/10**9) > 10:
+		MessageBox = ctypes.windll.user32.MessageBoxW
+		question = MessageBox(None, 'Temps entre 2 screens > 10 secondes !\nVoulez vous continuer le photomerging ?', 'PHOTOMERGING',  win32con.MB_YESNO)
+		if question != win32con.IDYES:
+			screens = []
+			return
+	else:
+		None #Emettre son pour photomerging
+	x, y = im.size
+	nb_of_test = 0
+	path_pcd_img = screens[-2][1]
+	pcd_im = cv2.imread(path_pcd_img)
+	pcd_im_grey = cv2.imread(path_pcd_img,0) #grey
+	img = cv2.imread(pathname,0) #grey
+	copy=cv2.imread(pathname)
+
+	while nb_of_test < 3:
+		divisors = [15,30]
+		dx = int(x/divisors[nb_of_test])
+		dy = int(y/divisors[nb_of_test])
+
+		starts_x=[x for x in range(0,x,dx)]
+		ends_x=[x for x in range(dx,x+dx,dx)]
+		starts_y=[y for y in range(0,y,dy)]
+		ends_y=[y for y in range(dy,y+dy,dy)]
+	
+		liste=[] #Doit contenir toutes les images crops im
+	
+		for id2, sy in enumerate(starts_y):
+			for id1, sx in enumerate(starts_x):
+				crop = img[sy:ends_y[id2],sx:ends_x[id1]]
+				liste.append([crop,(sx,sy)])
+				#try:
+				#	w2, h2 = crop.shape[::-1]
+				#	cv2.rectangle(copy, (sx,sy), (sx + w2, sy + h2), (0,0,255), 1)
+				#	cv2.imwrite(chemin+"\\Screenshots\\2_result.jpg",copy)
+				#except:
+				#	print(id1,id2,(sx,ends_x[id1]),(sy,ends_y[id2]))
+
+		array=[] #Array
+		row=[]
+		for c in liste:
+			row.append(c)
+			if len(row) == divisors[nb_of_test]:
+				array.append(row)
+				row = []
+
+		nb_of_test+=1
+		reversed_liste = Spiral(len(array), len(array[0]), array, len(liste),-1)
+		lT,lR,lB,lL = Methodic(array, len(liste))
+		t0=time.time()
+		c1,c2 = thread_match(pcd_im, pcd_im_grey,[lT,lR,lB,lL],reversed_liste, array, nb_of_test)
+		t1=time.time()
+		print("Timer :", t1-t0, "seconds to found :", (c1,c2))
+
+		if c1 != None :
+			break
+	if c1 == None:
+		return
+	img_pcd_size = screens[-2][2]
+	size_x = max(img_pcd_size[0]+c1[0],x+c2[0])
+	size_y = max(img_pcd_size[1]+c1[1],y+c2[1])
+	
+	new = Image.new("RGB", (size_x, size_y), "Black")
+
+	img1 = Image.open(path_pcd_img)			
+	new.paste(img1, c1)
+	img2 = Image.open(pathname)			
+	new.paste(img2, c2)
+
+	result_path = chemin+"\\Screenshots\\"+tns+"_result.jpg"
+	new.save(result_path)
+	print("RESULT SAVED",(int(time.time_ns())-int(screens[-1][0]))/10**9)
+	screens = [[tns,result_path,new.size]]
+
+	winsound.Beep(750,200)
+
+def for_canonical(f):
+	global ecouteur
+	return lambda k: f(ecouteur.canonical(k))
+
+def thread_print_screen():
+	global ecouteur
+	hotkey = keyboard.HotKey(
+	keyboard.HotKey.parse('<shift_l>+<print_screen>'),
+	screenshot)
+	with keyboard.Listener(
+		on_press=for_canonical(hotkey.press),
+		on_release=for_canonical(hotkey.release)) as ecouteur:
+		ecouteur.join()
+
 threading.Thread(target=root_tk).start()
 threading.Thread(target=options).start()
 threading.Thread(target=test_tip_numpad).start()
+threading.Thread(target=thread_print_screen).start()
+
 with keyboard.GlobalHotKeys({
 		'<ctrl>+c': ctrl_c,
 		'<ctrl>+v': ctrl_v,
